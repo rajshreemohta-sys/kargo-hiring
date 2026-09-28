@@ -1,26 +1,38 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
+/* White is the canvas, black carries the weight, orange is the accent (sparingly). */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-ink: #0a0a0a;
+  --color-muted: #6b6b6b;
+  --color-line: #ebebeb;
+  --color-soft: #f7f7f7;
+  --color-accent: #f26b1d;
+  --color-accent-soft: #fff3eb;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+html { color-scheme: light; }
+body { background: #ffffff; color: var(--color-ink); }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40;
+}
+@utility btn-primary {
+  @apply btn bg-ink text-white hover:bg-neutral-800;
+}
+@utility btn-ghost {
+  @apply btn border border-line bg-white text-ink hover:bg-soft;
+}
+@utility btn-accent {
+  @apply btn bg-accent text-white hover:brightness-95;
+}
+@utility card {
+  @apply rounded-xl border border-line bg-white;
+}
+@utility label {
+  @apply text-xs font-medium uppercase tracking-wide text-muted;
+}
+@utility input {
+  @apply w-full rounded-lg border border-line bg-white px-3 py-2 text-sm outline-none focus:border-ink;
 }
