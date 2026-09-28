@@ -1,6 +1,6 @@
 import "server-only";
 import { Resend } from "resend";
-import { db, type Email } from "../db";
+import { maybeOne, one, query, type Email } from "../db";
 import { toHtml } from "./templates";
 
 let resend: Resend | null = null;
@@ -14,26 +14,18 @@ export async function sendEmail(emailId: string): Promise<Email> {
   const from = process.env.EMAIL_FROM;
   if (!key || !from) throw new Error("Email isn't set up yet: add RESEND_API_KEY and EMAIL_FROM.");
 
-  const { data: claimed, error } = await db()
-    .from("emails")
-    .update({ status: "sending", error: null, updated_at: new Date().toISOString() })
-    .eq("id", emailId)
-    .in("status", ["draft", "failed"])
-    .select("*")
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  if (!claimed) throw new Error("This email has already been sent or is being sent.");
-  const email = claimed as Email;
+  const email = await maybeOne<Email>(
+    `update emails set status = 'sending', error = null, updated_at = now()
+     where id = $1 and status in ('draft', 'failed') returning *`,
+    [emailId],
+  );
+  if (!email) throw new Error("This email has already been sent or is being sent.");
 
   // The only place the candidate's contact details meet the email: fetched here, at send time.
-  const { data: pii } = await db()
-    .from("candidate_pii")
-    .select("email")
-    .eq("candidate_id", email.candidate_id)
-    .single();
+  const pii = await maybeOne<{ email: string | null }>("select email from candidate_pii where candidate_id = $1", [email.candidate_id]);
 
-  const fail = async (message: string) => {
-    await db().from("emails").update({ status: "failed", error: message, updated_at: new Date().toISOString() }).eq("id", emailId);
+  const fail = async (message: string): Promise<never> => {
+    await query("update emails set status = 'failed', error = $2, updated_at = now() where id = $1", [emailId, message]);
     throw new Error(message);
   };
   if (!pii?.email) return fail("No email address on file for this candidate. Add one on their page.");
@@ -52,11 +44,9 @@ export async function sendEmail(emailId: string): Promise<Email> {
   );
   if (sendError || !data) return fail(sendError?.message ?? "Resend didn't accept the email.");
 
-  const { data: sent } = await db()
-    .from("emails")
-    .update({ status: "sent", resend_id: data.id, sent_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .eq("id", emailId)
-    .select("*")
-    .single();
-  return sent as Email;
+  return one<Email>(
+    `update emails set status = 'sent', resend_id = $2, sent_at = now(), updated_at = now()
+     where id = $1 returning *`,
+    [emailId, data.id],
+  );
 }

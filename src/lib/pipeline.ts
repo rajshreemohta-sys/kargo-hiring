@@ -1,13 +1,12 @@
 import "server-only";
 import { evaluateCv, MODEL } from "./ai/evaluate";
-import { CV_BUCKET, db, getSettings, must, type Candidate, type CandidatePii, type Email } from "./db";
+import { getSettings, maybeOne, one, query, type Candidate, type CandidatePii, type Email } from "./db";
 import { sendEmail } from "./email/send";
 import { inviteDraft, rejectionDraft } from "./email/templates";
 import { findLeaks, redact } from "./privacy/redact";
+import { putCv } from "./storage";
 import { ROLES, type Role } from "./rubric";
 import { decide, scoreRole, type Band } from "./scoring";
-
-const now = () => new Date().toISOString();
 
 function privacyProblem(pii: { fullName: string | null }, leaks: string[]): string | null {
   if (!pii.fullName) return "Couldn't find the candidate's name in the CV. Add it under Contact so it can be removed before the AI reads the CV.";
@@ -27,102 +26,80 @@ export async function createCandidate(input: {
   const r = redact(rawText);
 
   if (r.pii.email) {
-    const { data: existing } = await db().from("candidate_pii").select("candidate_id").ilike("email", r.pii.email).maybeSingle();
+    const existing = await maybeOne<{ candidate_id: string }>(
+      "select candidate_id from candidate_pii where lower(email) = lower($1) limit 1",
+      [r.pii.email],
+    );
     if (existing) return { id: existing.candidate_id, duplicateOf: existing.candidate_id };
   }
 
   const problem = privacyProblem(r.pii, r.leaks);
-  const candidate = must(
-    await db()
-      .from("candidates")
-      .insert({
-        applied_role: input.appliedRole,
-        redacted_cv: r.redacted,
-        redactions: r.counts,
-        status: problem ? "error" : "pending",
-        error: problem,
-      })
-      .select("id")
-      .single(),
-  ) as { id: string };
+  const { id } = await one<{ id: string }>(
+    `insert into candidates (applied_role, redacted_cv, redactions, status, error)
+     values ($1, $2, $3, $4, $5) returning id`,
+    [input.appliedRole, r.redacted, JSON.stringify(r.counts), problem ? "error" : "pending", problem],
+  );
 
-  let cvPath: string | null = null;
+  let cvKey: string | null = null;
   if (input.file) {
-    cvPath = `${candidate.id}/${input.file.name.replace(/[^\w.-]+/g, "_")}`;
-    const { error } = await db().storage.from(CV_BUCKET).upload(cvPath, input.file, { contentType: input.file.type || undefined });
-    if (error) cvPath = null; // keep going: the text is what matters, the file is a convenience
+    try {
+      cvKey = id;
+      await putCv(cvKey, input.file);
+    } catch (e) {
+      console.error("CV file upload failed", e);
+      cvKey = null; // keep going: the text is what matters, the file is a convenience
+    }
   }
 
-  must(
-    await db()
-      .from("candidate_pii")
-      .insert({
-        candidate_id: candidate.id,
-        full_name: r.pii.fullName,
-        email: r.pii.email,
-        phone: r.pii.phone,
-        links: r.pii.links,
-        other: r.pii.other,
-        raw_text: rawText,
-        cv_path: cvPath,
-        cv_filename: input.file?.name ?? null,
-      })
-      .select("candidate_id")
-      .single(),
+  await query(
+    `insert into candidate_pii (candidate_id, full_name, email, phone, links, other, raw_text, cv_key, cv_filename)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [id, r.pii.fullName, r.pii.email, r.pii.phone, r.pii.links, JSON.stringify(r.pii.other), rawText, cvKey, input.file?.name ?? null],
   );
-  return { id: candidate.id };
+  return { id };
 }
 
 /** Stage 2: score the redacted CV for both roles, decide, draft emails and (optionally) send them. */
 export async function evaluateCandidate(id: string): Promise<Candidate> {
-  const current = must(await db().from("candidates").select("status, updated_at").eq("id", id).single()) as Candidate;
-  // A run that's been "evaluating" for over 6 minutes died with its function; let it be retried.
-  if (current.status === "evaluating" && Date.now() - Date.parse(current.updated_at) < 6 * 60_000) {
-    throw new Error("This candidate is already being evaluated.");
-  }
-  const { data: claimed } = await db()
-    .from("candidates")
-    .update({ status: "evaluating", error: null, updated_at: now() })
-    .eq("id", id)
-    .eq("updated_at", current.updated_at)
-    .select("*")
-    .maybeSingle();
-  if (!claimed) throw new Error("This candidate is already being evaluated.");
-  const c = claimed as Candidate;
+  // Claim the candidate atomically. A run stuck in "evaluating" for over 6 minutes died with
+  // its function, so it may be retried.
+  const c = await maybeOne<Candidate>(
+    `update candidates set status = 'evaluating', error = null, updated_at = now()
+     where id = $1 and (status <> 'evaluating' or updated_at < now() - interval '6 minutes')
+     returning *`,
+    [id],
+  );
+  if (!c) throw new Error("This candidate is already being evaluated.");
 
   try {
     // Last check before anything leaves the server: the redacted text must not contain the
     // name, email or phone we hold for this person.
-    const { data: pii } = await db().from("candidate_pii").select("full_name").eq("candidate_id", id).single();
-    const nameParts = (pii?.full_name ?? "").toLowerCase().split(/\s+/).filter((t: string) => t.length >= 2);
+    const pii = await maybeOne<Pick<CandidatePii, "full_name">>("select full_name from candidate_pii where candidate_id = $1", [id]);
+    const nameParts = (pii?.full_name ?? "").toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
     const problem = privacyProblem({ fullName: pii?.full_name ?? null }, findLeaks(c.redacted_cv, nameParts));
     if (problem) throw new Error(problem);
 
     const out = await evaluateCv(c.redacted_cv, c.applied_role);
     const scores = ROLES.map((role) => scoreRole(role, out.judgements[role].criteria, out.judgements[role].summary, c.redacted_cv));
 
-    must(
-      await db()
-        .from("evaluations")
-        .upsert(
-          scores.map((s) => ({
-            candidate_id: id,
-            role: s.role,
-            total: s.total,
-            criteria: s.criteria,
-            summary: s.summary,
-            model: out.model || MODEL,
-            created_at: now(),
-          })),
-          { onConflict: "candidate_id,role" },
-        )
-        .select("id"),
-    );
-    await db().from("candidates").update({ interview_brief: out.brief, status: "evaluated", updated_at: now() }).eq("id", id);
+    for (const s of scores) {
+      await query(
+        `insert into evaluations (candidate_id, role, total, criteria, summary, model)
+         values ($1, $2, $3, $4, $5, $6)
+         on conflict (candidate_id, role) do update
+           set total = excluded.total, criteria = excluded.criteria, summary = excluded.summary,
+               model = excluded.model, created_at = now()`,
+        [id, s.role, s.total, JSON.stringify(s.criteria), s.summary, out.model || MODEL],
+      );
+    }
+    await query("update candidates set interview_brief = $2, status = 'evaluated', updated_at = now() where id = $1", [
+      id,
+      JSON.stringify(out.brief),
+    ]);
 
     // A decision the team already made by hand, or one that's been emailed, stands.
-    const { data: sent } = await db().from("emails").select("id").eq("candidate_id", id).eq("status", "sent");
-    if (c.decision_source !== "manual" && !sent?.length) {
+    const sent = await query("select id from emails where candidate_id = $1 and status = 'sent'", [id]);
+    if (c.decision_source !== "manual" && !sent.length) {
       const settings = await getSettings();
       const d = decide(
         c.applied_role,
@@ -133,10 +110,10 @@ export async function evaluateCandidate(id: string): Promise<Candidate> {
     }
   } catch (e) {
     const message = e instanceof Error ? e.message : "Evaluation failed.";
-    await db().from("candidates").update({ status: "error", error: message, updated_at: now() }).eq("id", id);
+    await query("update candidates set status = 'error', error = $2, updated_at = now() where id = $1", [id, message]);
     throw e;
   }
-  return must(await db().from("candidates").select("*").eq("id", id).single()) as Candidate;
+  return one<Candidate>("select * from candidates where id = $1", [id]);
 }
 
 /**
@@ -144,16 +121,13 @@ export async function evaluateCandidate(id: string): Promise<Candidate> {
  * when auto-send is on; manual decisions leave a draft for the team to review and send.
  */
 export async function applyDecision(id: string, decision: Band, role: Role, source: "auto" | "manual") {
-  const { data: sent } = await db().from("emails").select("kind").eq("candidate_id", id).in("status", ["sent", "sending"]);
-  if (sent?.length) throw new Error("An email has already gone to this candidate, so the decision is locked.");
+  const sent = await query("select id from emails where candidate_id = $1 and status in ('sent', 'sending')", [id]);
+  if (sent.length) throw new Error("An email has already gone to this candidate, so the decision is locked.");
 
-  must(
-    await db()
-      .from("candidates")
-      .update({ decision, decision_role: role, decision_source: source, updated_at: now() })
-      .eq("id", id)
-      .select("id")
-      .single(),
+  await one(
+    `update candidates set decision = $2, decision_role = $3, decision_source = $4, updated_at = now()
+     where id = $1 returning id`,
+    [id, decision, role, source],
   );
   const email = await redraft(id);
   if (email && source === "auto") {
@@ -164,58 +138,58 @@ export async function applyDecision(id: string, decision: Band, role: Role, sour
 
 /** (Re)writes the unsent draft for the candidate's current decision. Returns it, or null for "review". */
 export async function redraft(id: string): Promise<Email | null> {
-  const c = must(await db().from("candidates").select("*").eq("id", id).single()) as Candidate;
-  const pii = must(await db().from("candidate_pii").select("full_name").eq("candidate_id", id).single()) as Pick<CandidatePii, "full_name">;
+  const c = await one<Candidate>("select * from candidates where id = $1", [id]);
+  const pii = await one<Pick<CandidatePii, "full_name">>("select full_name from candidate_pii where candidate_id = $1", [id]);
   const settings = await getSettings();
 
-  await db().from("emails").delete().eq("candidate_id", id).in("status", ["draft", "failed"]);
+  await query("delete from emails where candidate_id = $1 and status in ('draft', 'failed')", [id]);
   if (c.decision !== "shortlisted" && c.decision !== "rejected") return null;
 
+  const role = c.decision_role ?? c.applied_role;
   const draft =
     c.decision === "rejected"
       ? rejectionDraft({ name: pii.full_name, appliedRole: c.applied_role, settings })
       : inviteDraft({
           name: pii.full_name,
           appliedRole: c.applied_role,
-          inviteRole: c.decision_role ?? c.applied_role,
-          brief: c.interview_brief?.[c.decision_role ?? c.applied_role] ?? [],
+          inviteRole: role,
+          brief: c.interview_brief?.[role] ?? [],
           settings,
         });
 
-  return must(
-    await db()
-      .from("emails")
-      .insert({ candidate_id: id, kind: c.decision === "rejected" ? "rejection" : "invite", ...draft })
-      .select("*")
-      .single(),
-  ) as Email;
+  return one<Email>(
+    "insert into emails (candidate_id, kind, subject, body) values ($1, $2, $3, $4) returning *",
+    [id, c.decision === "rejected" ? "rejection" : "invite", draft.subject, draft.body],
+  );
 }
 
 /** Updates the private contact details. A corrected name re-runs redaction on the original text. */
 export async function updateContact(id: string, patch: { full_name?: string; email?: string; phone?: string }) {
-  const pii = must(await db().from("candidate_pii").select("*").eq("candidate_id", id).single()) as CandidatePii;
+  const pii = await one<CandidatePii>("select * from candidate_pii where candidate_id = $1", [id]);
   const next = {
     full_name: patch.full_name?.trim() || pii.full_name,
     email: patch.email?.trim() || pii.email,
     phone: patch.phone?.trim() || pii.phone,
   };
-  await db().from("candidate_pii").update(next).eq("candidate_id", id);
+  await query("update candidate_pii set full_name = $2, email = $3, phone = $4 where candidate_id = $1", [
+    id,
+    next.full_name,
+    next.email,
+    next.phone,
+  ]);
 
   if (next.full_name !== pii.full_name) {
     const r = redact(pii.raw_text, { fullName: next.full_name });
     const problem = privacyProblem(r.pii, r.leaks);
-    const c = must(await db().from("candidates").select("status").eq("id", id).single()) as Pick<Candidate, "status">;
-    await db()
-      .from("candidates")
-      .update({
-        redacted_cv: r.redacted,
-        redactions: r.counts,
-        error: problem,
-        status: problem ? "error" : c.status === "error" ? "pending" : c.status,
-        updated_at: now(),
-      })
-      .eq("id", id);
+    await query(
+      `update candidates
+       set redacted_cv = $2, redactions = $3, error = $4,
+           status = case when $4::text is not null then 'error' when status = 'error' then 'pending' else status end,
+           updated_at = now()
+       where id = $1`,
+      [id, r.redacted, JSON.stringify(r.counts), problem],
+    );
   }
-  const { data: draft } = await db().from("emails").select("id").eq("candidate_id", id).in("status", ["draft", "failed"]);
-  if (draft?.length) await redraft(id);
+  const drafts = await query("select id from emails where candidate_id = $1 and status in ('draft', 'failed')", [id]);
+  if (drafts.length) await redraft(id);
 }

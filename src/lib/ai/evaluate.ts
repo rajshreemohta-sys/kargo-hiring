@@ -88,6 +88,7 @@ export class EvaluationError extends Error {}
 
 /** Evaluate a redacted CV. The input must already have passed the privacy check. */
 export async function evaluateCv(redactedCv: string, appliedRole: Role): Promise<EvaluationOutput> {
+  if (!process.env.ANTHROPIC_API_KEY) throw new EvaluationError("Scoring isn't set up yet: add ANTHROPIC_API_KEY.");
   const response = await anthropic().beta.messages.parse({
     model: MODEL,
     max_tokens: 16000,

@@ -5,7 +5,7 @@ import { ContactCard } from "@/components/ContactCard";
 import { DecisionPanel } from "@/components/DecisionPanel";
 import { EmailCard } from "@/components/EmailCard";
 import { DecisionBadge, Dots, StatusText } from "@/components/ui";
-import { candidateRef, db, getSettings, type Candidate, type CandidatePii, type Email, type Evaluation } from "@/lib/db";
+import { candidateRef, getSettings, isId, maybeOne, query, type Candidate, type CandidatePii, type Email, type Evaluation } from "@/lib/db";
 import { ROLE_LABEL, ROLES, SCORE_SCALE, type Role } from "@/lib/rubric";
 import { band } from "@/lib/scoring";
 
@@ -17,20 +17,18 @@ const REDACTION_LABEL: Record<string, string> = {
 
 export default async function CandidatePage({ params }: PageProps<"/candidates/[id]">) {
   const { id } = await params;
-  const [c, pii, evals, emails, settings] = await Promise.all([
-    db().from("candidates").select("*").eq("id", id).maybeSingle(),
-    db().from("candidate_pii").select("*").eq("candidate_id", id).maybeSingle(),
-    db().from("evaluations").select("*").eq("candidate_id", id),
-    db().from("emails").select("*").eq("candidate_id", id).order("created_at", { ascending: false }),
+  if (!isId(id)) notFound();
+  const [candidate, contact, evaluations, emails, settings] = await Promise.all([
+    maybeOne<Candidate>("select * from candidates where id = $1", [id]),
+    maybeOne<CandidatePii>("select * from candidate_pii where candidate_id = $1", [id]),
+    query<Evaluation>("select * from evaluations where candidate_id = $1", [id]),
+    query<Email>("select * from emails where candidate_id = $1 order by created_at desc", [id]),
     getSettings(),
   ]);
-  if (!c.data) notFound();
-  const candidate = c.data as Candidate;
-  const contact = pii.data as CandidatePii;
-  const evaluations = (evals.data ?? []) as Evaluation[];
+  if (!candidate) notFound();
   const thresholds = { shortlist: settings.shortlist_threshold, reject: settings.reject_threshold };
   const order: Role[] = candidate.applied_role === "pm" ? ["pm", "spm"] : ["spm", "pm"];
-  const locked = ((emails.data ?? []) as Email[]).some((e) => e.status === "sent" || e.status === "sending");
+  const locked = emails.some((e) => e.status === "sent" || e.status === "sending");
   const redactions = Object.entries(candidate.redactions ?? {}).filter(([, n]) => n > 0);
 
   return (
@@ -57,7 +55,7 @@ export default async function CandidatePage({ params }: PageProps<"/candidates/[
             </p>
           )}
         </div>
-        <CandidateActions id={id} canRescore={candidate.status !== "evaluating" && !locked} hasFile={!!contact?.cv_path} />
+        <CandidateActions id={id} canRescore={candidate.status !== "evaluating" && !locked} hasFile={!!contact?.cv_key} />
       </div>
 
       {candidate.status === "error" && candidate.error && (
@@ -159,7 +157,7 @@ export default async function CandidatePage({ params }: PageProps<"/candidates/[
               scores={Object.fromEntries(ROLES.map((r) => [r, Number(evaluations.find((e) => e.role === r)?.total ?? 0)])) as Record<Role, number>}
             />
           )}
-          {((emails.data ?? []) as Email[]).map((e) => (
+          {emails.map((e) => (
             <EmailCard key={e.id} email={e} to={contact?.email ?? null} />
           ))}
           {contact && <ContactCard id={id} contact={contact} />}

@@ -1,22 +1,48 @@
 import "server-only";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { attachDatabasePool } from "@vercel/functions";
+import pg from "pg";
 import type { Role } from "./rubric";
 import type { Band, ScoredCriterion } from "./scoring";
 import type { SenderSettings } from "./email/templates";
 
-let client: SupabaseClient | null = null;
+// Netlify Database is Postgres; from Vercel we connect with its connection string.
+// Return numeric and bigint columns as JS numbers (scores and ref numbers are small).
+pg.types.setTypeParser(pg.types.builtins.NUMERIC, parseFloat);
+pg.types.setTypeParser(pg.types.builtins.INT8, (v) => parseInt(v, 10));
+// Timestamps as ISO strings, so rows pass straight to client components and JSON.
+// Keep pg's original parser once, so reloading this module doesn't wrap our own wrapper.
+const g = globalThis as unknown as { kargoPool?: pg.Pool; pgParseTimestamp?: (v: string) => Date };
+g.pgParseTimestamp ??= pg.types.getTypeParser(pg.types.builtins.TIMESTAMPTZ) as (v: string) => Date;
+pg.types.setTypeParser(pg.types.builtins.TIMESTAMPTZ, (v) => g.pgParseTimestamp!(v).toISOString());
 
-/** Server-only Supabase client with the secret key. Tables have RLS on and no public policies. */
-export function db(): SupabaseClient {
-  if (client) return client;
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error("Missing SUPABASE_URL or SUPABASE_SECRET_KEY.");
-  client = createClient(url, key, { auth: { persistSession: false } });
-  return client;
+function pool(): pg.Pool {
+  if (g.kargoPool) return g.kargoPool;
+  const connectionString = process.env.NETLIFY_DATABASE_URL;
+  if (!connectionString) throw new Error("Missing NETLIFY_DATABASE_URL.");
+  // Small pool: each serverless instance handles few requests at a time.
+  const created = new pg.Pool({ connectionString, max: 3, idleTimeoutMillis: 10_000 });
+  attachDatabasePool(created); // lets Vercel close idle connections before a function is suspended
+  g.kargoPool = created;
+  return created;
 }
 
-export const CV_BUCKET = "cvs";
+/** Run a parameterised query ($1, $2…) and return the rows. */
+export async function query<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
+  const { rows } = await pool().query(text, params);
+  return rows as T[];
+}
+
+/** The first row, or null. */
+export async function maybeOne<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T | null> {
+  return (await query<T>(text, params))[0] ?? null;
+}
+
+/** The first row; throws if there isn't one. */
+export async function one<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T> {
+  const row = await maybeOne<T>(text, params);
+  if (!row) throw new Error("Not found");
+  return row;
+}
 
 export type Candidate = {
   id: string;
@@ -42,7 +68,7 @@ export type CandidatePii = {
   links: string[];
   other: Record<string, string[]>;
   raw_text: string;
-  cv_path: string | null;
+  cv_key: string | null;
   cv_filename: string | null;
 };
 
@@ -77,16 +103,10 @@ export type Settings = SenderSettings & {
   auto_send: boolean;
 };
 
+export const isId = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+
 export const candidateRef = (n: number) => `KRG-${String(n).padStart(4, "0")}`;
 
 export async function getSettings(): Promise<Settings> {
-  const { data, error } = await db().from("settings").select("*").eq("id", 1).single();
-  if (error) throw error;
-  return data as Settings;
-}
-
-export function must<T>(res: { data: T | null; error: { message: string } | null }): T {
-  if (res.error) throw new Error(res.error.message);
-  if (res.data === null) throw new Error("Not found");
-  return res.data;
+  return one<Settings>("select * from settings where id = 1");
 }

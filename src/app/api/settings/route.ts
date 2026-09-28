@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { query } from "@/lib/db";
 import { fail, handle, ok } from "@/lib/http";
 
 export const PUT = handle(async (request: Request) => {
@@ -11,20 +11,20 @@ export const PUT = handle(async (request: Request) => {
   const text = (k: string) => String(b[k] ?? "").trim();
   if (!text("sender_name") || !text("sender_title")) return fail("Add a sender name and title.");
   if (text("scheduling_link") && !/^https:\/\//.test(text("scheduling_link"))) return fail("The scheduling link should start with https://");
-  const { error } = await db()
-    .from("settings")
-    .update({
-      shortlist_threshold: shortlist,
-      reject_threshold: reject,
-      auto_send: Boolean(b.auto_send),
-      sender_name: text("sender_name"),
-      sender_title: text("sender_title"),
-      interview_format: text("interview_format") || "a 45-minute conversation",
-      interview_location: text("interview_location") || "our office in Mumbai",
-      scheduling_link: text("scheduling_link"),
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", 1);
-  if (error) return fail(error.message, 500);
+  await query(
+    `update settings set shortlist_threshold = $1, reject_threshold = $2, auto_send = $3, sender_name = $4,
+       sender_title = $5, interview_format = $6, interview_location = $7, scheduling_link = $8, updated_at = now()
+     where id = 1`,
+    [
+      shortlist,
+      reject,
+      Boolean(b.auto_send),
+      text("sender_name"),
+      text("sender_title"),
+      text("interview_format") || "a 45-minute conversation",
+      text("interview_location") || "our office in Mumbai",
+      text("scheduling_link"),
+    ],
+  );
   return ok();
 });

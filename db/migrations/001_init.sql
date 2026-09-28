@@ -2,8 +2,6 @@
 -- Personal details live ONLY in candidate_pii. Everything the AI reads comes from
 -- candidates.redacted_cv. Nothing in the evaluation path selects from candidate_pii.
 
-create extension if not exists pgcrypto;
-
 create table public.candidates (
   id uuid primary key default gen_random_uuid(),
   ref_num bigint generated always as identity unique,
@@ -29,7 +27,7 @@ create table public.candidate_pii (
   links text[] not null default '{}',
   other jsonb not null default '{}'::jsonb,   -- address, DOB etc. that were stripped
   raw_text text not null,                     -- original CV text, never sent to AI
-  cv_path text,                               -- private storage object
+  cv_key text,                                -- key in the private Netlify Blobs store
   cv_filename text,
   created_at timestamptz not null default now()
 );
@@ -75,17 +73,3 @@ create table public.settings (
   updated_at timestamptz not null default now()
 );
 insert into public.settings (id) values (1) on conflict do nothing;
-
--- Server-only access: RLS on, no policies, no grants for browser roles.
-do $$
-declare t text;
-begin
-  foreach t in array array['candidates', 'candidate_pii', 'evaluations', 'emails', 'settings'] loop
-    execute format('alter table public.%I enable row level security', t);
-    execute format('revoke all on public.%I from anon, authenticated', t);
-  end loop;
-end $$;
-
--- Private bucket for original CV files.
-insert into storage.buckets (id, name, public) values ('cvs', 'cvs', false)
-on conflict (id) do nothing;

@@ -12,9 +12,11 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
-    "@supabase/supabase-js": "^2.117.2",
+    "@netlify/blobs": "^11.1.1",
+    "@vercel/functions": "^3.9.9",
     "mammoth": "^1.13.0",
     "next": "16.3.6",
+    "pg": "^8.23.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "resend": "^6.30.0",
@@ -30,7 +32,6 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.6",
-    "pg": "^8.23.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^5.0.2"

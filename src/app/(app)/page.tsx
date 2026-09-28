@@ -2,11 +2,11 @@ import Link from "next/link";
 import { EvaluatePending } from "@/components/EvaluatePending";
 import { Uploader } from "@/components/Uploader";
 import { DecisionBadge, ScoreBar, StatusText } from "@/components/ui";
-import { candidateRef, db, type Candidate } from "@/lib/db";
+import { candidateRef, query, type Candidate } from "@/lib/db";
 import { ROLE_SHORT, type Role } from "@/lib/rubric";
 
 type Row = Candidate & {
-  candidate_pii: { full_name: string | null } | null;
+  full_name: string | null;
   evaluations: { role: Role; total: number }[];
   emails: { kind: string; status: string }[];
 };
@@ -21,13 +21,14 @@ const VIEWS = [
 
 export default async function Dashboard({ searchParams }: PageProps<"/">) {
   const { view = "all", q = "" } = (await searchParams) as { view?: string; q?: string };
-  const { data, error } = await db()
-    .from("candidates")
-    .select("*, candidate_pii(full_name), evaluations(role, total), emails(kind, status)")
-    .order("created_at", { ascending: false })
-    .limit(500);
-  if (error) throw new Error(error.message);
-  const all = (data ?? []) as Row[];
+  const all = await query<Row>(
+    `select c.*, p.full_name,
+       coalesce((select json_agg(json_build_object('role', e.role, 'total', e.total)) from evaluations e where e.candidate_id = c.id), '[]') as evaluations,
+       coalesce((select json_agg(json_build_object('kind', m.kind, 'status', m.status)) from emails m where m.candidate_id = c.id), '[]') as emails
+     from candidates c left join candidate_pii p on p.candidate_id = c.id
+     order by c.created_at desc
+     limit 500`,
+  );
 
   const count = (f: (r: Row) => boolean) => all.filter(f).length;
   const needsAttention = (r: Row) => r.status === "error";
@@ -35,7 +36,7 @@ export default async function Dashboard({ searchParams }: PageProps<"/">) {
     if (view === "attention" && !needsAttention(r)) return false;
     if (view !== "all" && view !== "attention" && r.decision !== view) return false;
     if (q) {
-      const hay = `${r.candidate_pii?.full_name ?? ""} ${candidateRef(r.ref_num)}`.toLowerCase();
+      const hay = `${r.full_name ?? ""} ${candidateRef(r.ref_num)}`.toLowerCase();
       if (!hay.includes(q.toLowerCase())) return false;
     }
     return true;
@@ -116,7 +117,7 @@ export default async function Dashboard({ searchParams }: PageProps<"/">) {
                     <tr key={r.id} className="border-b border-line last:border-0 hover:bg-soft/60">
                       <td className="px-4 py-3">
                         <Link href={`/candidates/${r.id}`} className="font-medium hover:underline">
-                          {r.candidate_pii?.full_name ?? "Name not found"}
+                          {r.full_name ?? "Name not found"}
                         </Link>
                         <div className="font-mono text-xs text-muted">{candidateRef(r.ref_num)}</div>
                       </td>
