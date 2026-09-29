@@ -5,6 +5,9 @@ import { toHtml } from "./templates";
 
 let resend: Resend | null = null;
 
+/** When set, emails are redirected here instead of to candidates (for testing without a domain). */
+export const testRecipient = () => process.env.EMAIL_TEST_RECIPIENT?.trim() || null;
+
 /**
  * Sends one drafted email. The row is claimed (draft/failed → sending) before calling Resend,
  * so double-clicks and concurrent auto-sends can't send the same email twice.
@@ -30,15 +33,19 @@ export async function sendEmail(emailId: string): Promise<Email> {
   };
   if (!pii?.email) return fail("No email address on file for this candidate. Add one on their page.");
 
+  // Test mode: every email goes to the tester instead of the candidate, labelled with who it was for.
+  const testTo = testRecipient();
+  const note = testTo ? `[Test email — would have gone to ${pii.email}]\n\n` : "";
+
   resend ??= new Resend(key);
   const { data, error: sendError } = await resend.emails.send(
     {
       from,
-      to: pii.email,
+      to: testTo ?? pii.email,
       replyTo: process.env.EMAIL_REPLY_TO || undefined,
-      subject: email.subject,
-      text: email.body,
-      html: toHtml(email.body),
+      subject: testTo ? `[TEST] ${email.subject}` : email.subject,
+      text: note + email.body,
+      html: toHtml(note + email.body),
     },
     { idempotencyKey: `${email.id}-${email.updated_at}` },
   );

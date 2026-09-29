@@ -1,12 +1,14 @@
 import { connection } from "next/server";
 import { SettingsForm } from "@/components/SettingsForm";
 import { getSettings } from "@/lib/db";
+import { testRecipient } from "@/lib/email/send";
 import { RUBRIC, ROLE_LABEL, ROLES } from "@/lib/rubric";
 
 export default async function SettingsPage() {
   await connection(); // always read live settings, never a build-time snapshot
   const settings = await getSettings();
   const emailReady = Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM);
+  const testTo = testRecipient();
   return (
     <div className="space-y-8">
       <div>
@@ -16,6 +18,11 @@ export default async function SettingsPage() {
       {!emailReady && (
         <div className="rounded-xl bg-accent-soft px-4 py-3 text-sm text-accent">
           Email sending isn&apos;t set up yet. Add RESEND_API_KEY and EMAIL_FROM to the environment. Drafts are still prepared.
+        </div>
+      )}
+      {testTo && (
+        <div className="rounded-xl bg-accent-soft px-4 py-3 text-sm text-accent">
+          Test mode: every email goes to {testTo} instead of the candidate. Remove EMAIL_TEST_RECIPIENT to send for real.
         </div>
       )}
       <SettingsForm settings={settings} />

@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { Email } from "@/lib/db";
 import { api } from "./run";
 
-export function EmailCard({ email, to }: { email: Email; to: string | null }) {
+export function EmailCard({ email, to, testTo }: { email: Email; to: string | null; testTo: string | null }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [subject, setSubject] = useState(email.subject);
@@ -35,7 +35,10 @@ export function EmailCard({ email, to }: { email: Email; to: string | null }) {
         </span>
       </div>
       <div className="space-y-3 p-5 text-sm">
-        <div className="text-muted">To: <span className="text-ink">{to ?? "no email on file"}</span></div>
+        <div className="text-muted">
+          To: <span className="text-ink">{to ?? "no email on file"}</span>
+          {testTo && <span className="block text-xs text-accent">Test mode: will actually go to {testTo}</span>}
+        </div>
         {editing ? (
           <>
             <input className="input" value={subject} onChange={(e) => setSubject(e.target.value)} />
@@ -62,7 +65,7 @@ export function EmailCard({ email, to }: { email: Email; to: string | null }) {
                 <button
                   className="btn-accent"
                   disabled={busy || !to}
-                  onClick={() => confirm(`Send this email to ${to}?`) && run(() => api(`/api/emails/${email.id}/send`, { method: "POST" }))}
+                  onClick={() => confirm(`Send this email to ${testTo ? `${testTo} (test mode)` : to}?`) && run(() => api(`/api/emails/${email.id}/send`, { method: "POST" }))}
                 >
                   {busy ? "Sending…" : email.status === "failed" ? "Try again" : "Send"}
                 </button>

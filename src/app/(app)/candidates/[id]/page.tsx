@@ -8,6 +8,7 @@ import { DecisionBadge, Dots, StatusText } from "@/components/ui";
 import { candidateRef, getSettings, isId, maybeOne, query, type Candidate, type CandidatePii, type Email, type Evaluation } from "@/lib/db";
 import { ROLE_LABEL, ROLES, SCORE_SCALE, type Role } from "@/lib/rubric";
 import { band } from "@/lib/scoring";
+import { testRecipient } from "@/lib/email/send";
 
 const REDACTION_LABEL: Record<string, string> = {
   name: "name", email: "email", phone: "phone", link: "link", address: "address", handle: "handle",
@@ -158,7 +159,7 @@ export default async function CandidatePage({ params }: PageProps<"/candidates/[
             />
           )}
           {emails.map((e) => (
-            <EmailCard key={e.id} email={e} to={contact?.email ?? null} />
+            <EmailCard key={e.id} email={e} to={contact?.email ?? null} testTo={testRecipient()} />
           ))}
           {contact && <ContactCard id={id} contact={contact} />}
         </aside>
