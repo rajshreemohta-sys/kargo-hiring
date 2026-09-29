@@ -8,6 +8,7 @@ export function SettingsForm({ settings }: { settings: Settings }) {
   const router = useRouter();
   const [s, setS] = useState(settings);
   const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
+  const [resorted, setResorted] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => (setS({ ...s, [k]: v }), setState("idle"));
 
@@ -19,7 +20,8 @@ export function SettingsForm({ settings }: { settings: Settings }) {
         setState("saving");
         setError(null);
         try {
-          await api("/api/settings", { method: "PUT", body: JSON.stringify(s) });
+          const res = await api<{ resorted: number }>("/api/settings", { method: "PUT", body: JSON.stringify(s) });
+          setResorted(res.resorted ?? 0);
           setState("saved");
           router.refresh();
         } catch (err) {
@@ -83,7 +85,11 @@ export function SettingsForm({ settings }: { settings: Settings }) {
 
       <div className="flex items-center gap-3 md:col-span-2">
         <button className="btn-primary" disabled={state === "saving"}>{state === "saving" ? "Saving…" : "Save settings"}</button>
-        {state === "saved" && <span className="text-sm text-muted">Saved. New drafts will use these.</span>}
+        {state === "saved" && (
+          <span className="text-sm text-muted">
+            Saved.{resorted > 0 && ` ${resorted} candidate${resorted === 1 ? "" : "s"} not yet emailed ${resorted === 1 ? "was" : "were"} re-sorted.`}
+          </span>
+        )}
         {error && <span className="text-sm text-red-600">{error}</span>}
       </div>
     </form>

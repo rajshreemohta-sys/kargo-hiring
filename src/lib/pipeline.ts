@@ -198,3 +198,27 @@ export async function updateContact(id: string, patch: { full_name?: string; ema
   const drafts = await query("select id from emails where candidate_id = $1 and status in ('draft', 'failed')", [id]);
   if (drafts.length) await redraft(id);
 }
+
+/**
+ * After the cut-offs change, re-sort candidates the app decided on its own who haven't been
+ * emailed yet. Team decisions and anyone already emailed are left alone.
+ */
+export async function reapplyThresholds(): Promise<number> {
+  const settings = await getSettings();
+  const rows = await query<{ id: string; applied_role: Role; decision: Band; decision_role: Role; pm: number; spm: number }>(
+    `select c.id, c.applied_role, c.decision, c.decision_role,
+       (select total from evaluations e where e.candidate_id = c.id and e.role = 'pm') as pm,
+       (select total from evaluations e where e.candidate_id = c.id and e.role = 'spm') as spm
+     from candidates c
+     where c.status = 'evaluated' and c.decision_source = 'auto'
+       and not exists (select 1 from emails m where m.candidate_id = c.id and m.status in ('sent', 'sending'))`,
+  );
+  let changed = 0;
+  for (const r of rows) {
+    const d = decide(r.applied_role, { pm: r.pm, spm: r.spm }, { shortlist: settings.shortlist_threshold, reject: settings.reject_threshold });
+    if (d.decision === r.decision && d.role === r.decision_role) continue;
+    await applyDecision(r.id, d.decision, d.role, "auto");
+    changed++;
+  }
+  return changed;
+}

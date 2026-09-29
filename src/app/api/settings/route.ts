@@ -1,5 +1,6 @@
 import { query } from "@/lib/db";
 import { fail, handle, ok } from "@/lib/http";
+import { reapplyThresholds } from "@/lib/pipeline";
 
 export const PUT = handle(async (request: Request) => {
   const b = await request.json();
@@ -26,5 +27,6 @@ export const PUT = handle(async (request: Request) => {
       text("scheduling_link"),
     ],
   );
-  return ok();
+  const resorted = await reapplyThresholds();
+  return ok({ resorted });
 });
