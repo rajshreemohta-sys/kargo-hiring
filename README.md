@@ -37,5 +37,8 @@ Tests: `npm test`.
 
 ## Deploy (Vercel)
 
+The GitHub repo is connected to the Vercel project: every push to `main` deploys to production
+(https://kargo-hiring-chi.vercel.app), and other branches get preview deployments.
+
 Import the repo in Vercel, add every variable from `.env.example` in Project → Settings → Environment Variables,
 and deploy. Run `npm run db:migrate` once against the Neon database before first use. Scoring runs in `/api/candidates/[id]/evaluate` with `maxDuration = 300`.
