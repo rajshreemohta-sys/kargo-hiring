@@ -27,7 +27,7 @@ export function EmailCard({ email, to, testTo }: { email: Email; to: string | nu
   }
 
   return (
-    <section className="card">
+    <section id="email" className="card scroll-mt-6">
       <div className="flex items-center justify-between border-b border-line px-5 py-3">
         <h2 className="font-semibold">{email.kind === "invite" ? "Interview invitation" : "Rejection email"}</h2>
         <span className={`text-xs font-medium ${email.status === "sent" ? "text-ink" : email.status === "failed" ? "text-red-600" : "text-accent"}`}>

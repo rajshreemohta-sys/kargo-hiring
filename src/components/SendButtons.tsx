@@ -4,14 +4,14 @@ import { useState } from "react";
 import { api, pool } from "./run";
 
 /** Send one drafted email straight from the dashboard table. */
-export function SendDraft({ id, kind, failed }: { id: string; kind: "invite" | "rejection"; failed: boolean }) {
+export function SendDraft({ id, kind, failed, large = false }: { id: string; kind: "invite" | "rejection"; failed: boolean; large?: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
     <span className="flex items-center gap-2">
       <button
-        className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white hover:brightness-95 disabled:opacity-40"
+        className={large ? "btn-accent" : "rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white hover:brightness-95 disabled:opacity-40"}
         disabled={busy}
         onClick={async () => {
           if (!confirm(`Send the ${kind === "invite" ? "interview invitation" : "rejection email"} now?`)) return;

@@ -4,6 +4,7 @@ import { CandidateActions } from "@/components/CandidateActions";
 import { ContactCard } from "@/components/ContactCard";
 import { DecisionPanel } from "@/components/DecisionPanel";
 import { EmailCard } from "@/components/EmailCard";
+import { SendDraft } from "@/components/SendButtons";
 import { DecisionBadge, Dots, StatusText } from "@/components/ui";
 import { candidateRef, getSettings, isId, maybeOne, query, type Candidate, type CandidatePii, type Email, type Evaluation } from "@/lib/db";
 import { ROLE_LABEL, ROLES, SCORE_SCALE, type Role } from "@/lib/rubric";
@@ -58,6 +59,13 @@ export default async function CandidatePage({ params }: PageProps<"/candidates/[
         </div>
         <CandidateActions id={id} canRescore={candidate.status !== "evaluating" && !locked} hasFile={!!contact?.cv_filename} />
       </div>
+
+      <EmailStatus
+        email={emails[0] ?? null}
+        decision={candidate.status === "evaluated" ? candidate.decision : null}
+        to={contact?.email ?? null}
+        testTo={testRecipient()}
+      />
 
       {candidate.status === "error" && candidate.error && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{candidate.error}</div>
@@ -166,4 +174,46 @@ export default async function CandidatePage({ params }: PageProps<"/candidates/[
       </div>
     </div>
   );
+}
+
+/** Where this candidate's email stands, with the Send button up front. */
+function EmailStatus({ email, decision, to, testTo }: { email: Email | null; decision: Candidate["decision"]; to: string | null; testTo: string | null }) {
+  if (!decision) return null;
+  const what = email?.kind === "invite" ? "Interview invitation" : "Rejection email";
+  const recipient = testTo ? `${testTo} (test mode)` : to;
+
+  if (email?.status === "sent") {
+    const when = new Date(email.sent_at!).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-line px-4 py-3 text-sm">
+        <span className="h-2 w-2 rounded-full bg-ink" />
+        {what} sent to {recipient} on {when}.
+      </div>
+    );
+  }
+  if (email && (email.status === "draft" || email.status === "failed")) {
+    return (
+      <div className="flex flex-col gap-3 rounded-xl border border-accent/30 bg-accent-soft px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+        <span>
+          {email.status === "failed" ? (
+            <span className="text-red-700">{what} didn&apos;t send: {email.error}</span>
+          ) : (
+            <>
+              {what} is ready to send to {recipient ?? "this candidate (no email address on file)"}.{" "}
+              <a href="#email" className="underline">Preview or edit it</a>
+            </>
+          )}
+        </span>
+        <SendDraft id={email.id} kind={email.kind} failed={email.status === "failed"} large />
+      </div>
+    );
+  }
+  if (decision === "review") {
+    return (
+      <div className="rounded-xl border border-line px-4 py-3 text-sm text-muted">
+        No email yet. Choose Shortlist or Reject under Decision to prepare one.
+      </div>
+    );
+  }
+  return null;
 }

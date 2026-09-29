@@ -49,7 +49,7 @@ const SENSITIVE_LABELS: [string, RegExp][] = [
 const HEADING_WORDS =
   /\b(summary|profile|objective|experience|education|skills?|competenc(?:y|ies)|qualifications?|projects?|achievements?|awards?|certifications?|languages?|interests?|hobbies|references?|responsibilities|highlights|expertise|strengths|internships?|activities|publications|positions?|academic|professional|technical|core|key|career|personal|contact|details|information|declaration|training|tools|leadership|extracurricular|volunteer(?:ing)?|work|employment|history|about|curriculum|vitae|resume|résumé|overview|accomplishments|coursework|relevant|selected|additional|portfolio)\b/i;
 const ROLE_WORDS =
-  /\b(manager|engineer|analyst|executive|lead|head|director|associate|consultant|officer|intern|specialist|coordinator|developer|designer|founder|product|operations|logistics|freight|marketing|strategic|strategy|senior|junior|chief|limited|ltd|pvt|inc|llp|university|college|institute|school|technology|bachelor|master)\b/i;
+  /\b(manager|engineer|analyst|executive|lead|head|director|associate|consultant|officer|intern|specialist|coordinator|developer|designer|founder|co-founder|product|operations|logistics|freight|marketing|marketer|strategic|strategy|strategist|senior|junior|chief|growth|sales|business|brand|content|digital|data|scientist|researcher|research|writer|planner|advisor|adviser|architect|owner|partner|representative|administrator|supervisor|trainee|fresher|student|graduate|supply|chain|account|customer|success|program|programme|project|finance|financial|commercial|procurement|hr|recruiter|teacher|professor|doctor|lawyer|accountant|cpo|ceo|cto|coo|vp|president|leader|expert|professional|generalist|apm|pm|limited|ltd|pvt|inc|llp|corp|university|college|institute|school|technology|technologies|solutions|bachelor|master|mba)\b/i;
 // Words in file names that aren't part of a person's name.
 const FILENAME_NOISE = new Set(["cv", "resume", "resumé", "final", "updated", "new", "latest", "copy", "pm", "spm", "apm", "product", "manager", "senior", "doc", "pdf", "docx", "version", "draft"]);
 
@@ -118,7 +118,8 @@ export function nameCandidates(text: string, filename?: string | null): string[]
     const m = l.match(CONTACT);
     if (!m) return;
     add(asName(l.slice(0, m.index))); // "Tarun Joseph  tarun@… · +91…"
-    for (let j = i - 1; j >= Math.max(0, i - 3); j--) add(asName(lines[j])); // name on the lines above
+    // Name on the lines above, read top-down: the usual layout is name, then title, then contact.
+    for (let j = Math.max(0, i - 3); j < i; j++) add(asName(lines[j]));
   });
 
   for (const l of lines.filter(Boolean).slice(0, 3)) add(asName(l));
@@ -136,7 +137,11 @@ export function nameCandidates(text: string, filename?: string | null): string[]
       }
     }
   }
-  return found;
+  // Prefer a candidate whose words also appear in the email address or LinkedIn handle
+  // ("rohit.varma@…", "linkedin.com/in/rohit-varma"). Otherwise keep the order above.
+  const handles = (text.match(/[A-Z0-9._%+-]+(?=@)|linkedin\.com\/in\/[^\s/?]+/gi) ?? []).join(" ").toLowerCase();
+  const corroborated = (n: string) => n.toLowerCase().split(" ").some((w) => w.length >= 3 && handles.includes(w));
+  return [...found.filter(corroborated), ...found.filter((n) => !corroborated(n))];
 }
 
 /** Best guess at the candidate's name. */

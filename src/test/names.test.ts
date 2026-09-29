@@ -37,6 +37,19 @@ describe("name detection on awkward PDF layouts", () => {
     expect(guessName(cv, "product_manager_cv_final.pdf")).toBeNull();
   });
 
+  it("reads name, then title, then contact — and keeps the title out of the redaction", () => {
+    const cv = `Rahul Nair\nGrowth Marketer\nrahul.nair@x.com | +91 90000 22222${filler}`;
+    expect(guessName(cv)).toBe("Rahul Nair");
+    const r = redact(cv);
+    expect(r.redacted).toContain("Growth Marketer");
+    expect(r.redacted).not.toMatch(/rahul|nair/i);
+  });
+
+  it("prefers the candidate that matches the email or LinkedIn handle", () => {
+    const cv = `Supply Planning\nIrene Dsouza\nirene.dsouza@x.com · linkedin.com/in/irene-dsouza${filler}`;
+    expect(guessName(cv)).toBe("Irene Dsouza");
+  });
+
   it("leaves ordinary words alone when splitting glued text", () => {
     expect(splitJoins("LinkedIn KPIs SaaS iPhone")).toBe("LinkedIn KPIs SaaS iPhone");
     expect(splitJoins("SHARMAPriya JosephTARUN")).toBe("SHARMA Priya Joseph TARUN");
