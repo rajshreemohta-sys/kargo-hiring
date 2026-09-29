@@ -17,7 +17,8 @@ pg.types.setTypeParser(pg.types.builtins.TIMESTAMPTZ, (v) => g.pgParseTimestamp!
 
 function pool(): pg.Pool {
   if (g.kargoPool) return g.kargoPool;
-  const connectionString = process.env.DATABASE_URL;
+  // "require" already verifies the certificate in pg; say so explicitly to skip its warning.
+  const connectionString = process.env.DATABASE_URL?.replace("sslmode=require", "sslmode=verify-full");
   if (!connectionString) throw new Error("Missing DATABASE_URL.");
   // Small pool: each serverless instance handles few requests at a time.
   const created = new pg.Pool({ connectionString, max: 3, idleTimeoutMillis: 10_000 });

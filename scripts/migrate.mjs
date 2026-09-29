@@ -4,7 +4,7 @@ import { readdir, readFile } from "node:fs/promises";
 import pg from "pg";
 
 // Migrations need a direct (unpooled) connection when one is available.
-const url = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
+const url = (process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL)?.replace("sslmode=require", "sslmode=verify-full");
 if (!url) {
   console.error("Missing DATABASE_URL. Copy the connection string from the Neon console (or `vercel env pull .env.local`).");
   process.exit(1);
