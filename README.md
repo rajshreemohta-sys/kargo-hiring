@@ -10,7 +10,7 @@ Internal CV screening for Kargo's Product Manager and Senior Product Manager rol
    Those go to the private `candidate_pii` table, and the original file to `cv_files`, both in Neon Postgres.
    The redacted text is re-scanned for leftovers, and if the name can't be found or anything personal
    remains, the CV is held until the team fixes the contact details. Only the redacted text is ever sent to the model.
-3. **Scoring** – Claude scores every CV against **both** rubrics (`src/lib/rubric.ts`), 0–4 per criterion
+3. **Scoring** – Gemini scores every CV against **both** rubrics (`src/lib/rubric.ts`), 0–4 per criterion
    with verbatim evidence quotes. Code checks each quote exists in the CV (unfound quotes cap the criterion at 1),
    applies the weights, and computes a total out of 100 (`src/lib/scoring.ts`).
 4. **Decision** – shortlist at 70+, reject below 45, review in between (editable in Settings). If a candidate
@@ -22,7 +22,7 @@ Internal CV screening for Kargo's Product Manager and Senior Product Manager rol
 
 ## Stack
 
-Next.js on Vercel · Neon Postgres for records and CV files · Claude for scoring · Resend for email.
+Next.js on Vercel · Neon Postgres for records and CV files · Gemini for scoring · Resend for email.
 
 ## Setup
 

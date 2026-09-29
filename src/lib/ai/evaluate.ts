@@ -1,18 +1,19 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
-import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { z } from "zod";
 import { RUBRIC, ROLE_LABEL, SCORE_SCALE, type Role } from "../rubric";
 import type { CriterionJudgement } from "../scoring";
 
-export const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-5";
+export const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+// Two attempts must fit inside the route's 300 s limit.
+const TIMEOUT_MS = 140_000;
 
 const Judgement = z.object({
   reasoning: z.string().describe("2–3 sentences: which parts of the bar are met or missing, and why."),
   evidence: z
     .array(z.string())
     .describe("Short verbatim quotes copied exactly from the CV that support the score. Empty if none."),
-  score: z.number().int().describe("0–4 on the scale in the instructions."),
+  score: z.number().int().min(0).max(4).describe("0–4 on the scale in the instructions."),
 });
 
 const roleShape = (role: Role) =>
@@ -81,34 +82,72 @@ For each role, write exactly 4 lines addressed to the candidate ("you"), as they
 4. One practical thing to prepare, such as walking through a real process, fix or decision end to end.
 Do not mention scores, the rubric, or AI. Do not use placeholders or names. Warm, direct, no jargon.`;
 
-let client: Anthropic | null = null;
-const anthropic = () => (client ??= new Anthropic());
+// JSON Schema for Gemini's structured output, generated from the same zod schema we validate with.
+const RESPONSE_SCHEMA = (() => {
+  const schema = z.toJSONSchema(Evaluation) as Record<string, unknown>;
+  delete schema.$schema;
+  return schema;
+})();
+
+let client: GoogleGenAI | null = null;
+function gemini(): GoogleGenAI {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new EvaluationError("Scoring isn't set up yet: add GEMINI_API_KEY.");
+  client ??= new GoogleGenAI({ apiKey });
+  return client;
+}
 
 export class EvaluationError extends Error {}
 
-/** Evaluate a redacted CV. The input must already have passed the privacy check. */
-export async function evaluateCv(redactedCv: string, appliedRole: Role): Promise<EvaluationOutput> {
-  if (!process.env.ANTHROPIC_API_KEY) throw new EvaluationError("Scoring isn't set up yet: add ANTHROPIC_API_KEY.");
-  const response = await anthropic().beta.messages.parse({
+async function ask(redactedCv: string, appliedRole: Role): Promise<z.infer<typeof Evaluation>> {
+  const response = await gemini().models.generateContent({
     model: MODEL,
-    max_tokens: 16000,
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
-    thinking: { type: "adaptive" },
-    output_config: { effort: "high", format: betaZodOutputFormat(Evaluation) },
-    system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
-    messages: [
+    contents: [
       {
         role: "user",
-        content: `The candidate applied for: ${ROLE_LABEL[appliedRole]}. Score them for both roles.\n\n<cv>\n${redactedCv}\n</cv>`,
+        parts: [
+          {
+            text: `The candidate applied for: ${ROLE_LABEL[appliedRole]}. Score them for both roles.\n\n<cv>\n${redactedCv}\n</cv>`,
+          },
+        ],
       },
     ],
+    config: {
+      systemInstruction: SYSTEM,
+      responseMimeType: "application/json",
+      responseJsonSchema: RESPONSE_SCHEMA,
+      thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+      abortSignal: AbortSignal.timeout(TIMEOUT_MS),
+    },
   });
 
-  if (response.stop_reason === "refusal") throw new EvaluationError("The model declined to evaluate this CV.");
-  if (response.stop_reason === "max_tokens") throw new EvaluationError("The evaluation was cut off. Try again.");
-  const out = response.parsed_output;
-  if (!out) throw new EvaluationError("The evaluation came back in an unexpected format. Try again.");
+  if (response.promptFeedback?.blockReason) {
+    throw new EvaluationError(`Gemini declined to evaluate this CV (${response.promptFeedback.blockReason}).`);
+  }
+  const finish = response.candidates?.[0]?.finishReason;
+  if (finish && finish !== "STOP") throw new EvaluationError(`The evaluation stopped early (${finish}). Try again.`);
+
+  let json: unknown = null;
+  try {
+    json = JSON.parse(response.text ?? "null");
+  } catch {
+    // fall through to the format error below
+  }
+  const parsed = Evaluation.safeParse(json);
+  if (!parsed.success) throw new EvaluationError("The evaluation came back in an unexpected format. Try again.");
+  return parsed.data;
+}
+
+/** Evaluate a redacted CV. The input must already have passed the privacy check. */
+export async function evaluateCv(redactedCv: string, appliedRole: Role): Promise<EvaluationOutput> {
+  let out: z.infer<typeof Evaluation>;
+  try {
+    out = await ask(redactedCv, appliedRole);
+  } catch (e) {
+    if (e instanceof EvaluationError && e.message.startsWith("Scoring isn't set up")) throw e;
+    console.error("[evaluate] first attempt failed, retrying once", e);
+    out = await ask(redactedCv, appliedRole); // one retry for transient or malformed responses
+  }
 
   const fourLines = (lines: string[]) => lines.map((l) => l.trim()).filter(Boolean).slice(0, 4);
   return {
@@ -117,6 +156,6 @@ export async function evaluateCv(redactedCv: string, appliedRole: Role): Promise
       spm: { criteria: out.spm.criteria as Record<string, CriterionJudgement>, summary: out.spm.summary },
     },
     brief: { pm: fourLines(out.interview_brief.pm), spm: fourLines(out.interview_brief.spm) },
-    model: response.model,
+    model: MODEL,
   };
 }
