@@ -3,7 +3,7 @@ import { evaluateCv, MODEL } from "./ai/evaluate";
 import { getSettings, maybeOne, one, query, type Candidate, type CandidatePii, type Email } from "./db";
 import { sendEmail } from "./email/send";
 import { inviteDraft, rejectionDraft } from "./email/templates";
-import { findLeaks, redact } from "./privacy/redact";
+import { findLeaks, identityTokens, redact } from "./privacy/redact";
 import { putCv } from "./storage";
 import { ROLES, type Role } from "./rubric";
 import { decide, scoreRole, type Band } from "./scoring";
@@ -23,12 +23,14 @@ export async function createCandidate(input: {
   const rawText = input.rawText.trim();
   if (rawText.length < 200) throw new Error("Couldn't read enough text from this CV. If it's a scan, paste the text instead.");
 
-  const r = redact(rawText);
+  const r = redact(rawText, { filename: input.file?.name });
 
-  if (r.pii.email) {
+  // The same person uploaded twice: same email and same name. (Shared or placeholder
+  // addresses on different people's CVs are not duplicates.)
+  if (r.pii.email && r.pii.fullName) {
     const existing = await maybeOne<{ candidate_id: string }>(
-      "select candidate_id from candidate_pii where lower(email) = lower($1) limit 1",
-      [r.pii.email],
+      "select candidate_id from candidate_pii where lower(email) = lower($1) and lower(full_name) = lower($2) limit 1",
+      [r.pii.email, r.pii.fullName],
     );
     if (existing) return { id: existing.candidate_id, duplicateOf: existing.candidate_id };
   }
@@ -73,8 +75,12 @@ export async function evaluateCandidate(id: string): Promise<Candidate> {
   try {
     // Last check before anything leaves the server: the redacted text must not contain the
     // name, email or phone we hold for this person.
-    const pii = await maybeOne<Pick<CandidatePii, "full_name">>("select full_name from candidate_pii where candidate_id = $1", [id]);
-    const nameParts = (pii?.full_name ?? "").toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
+    // Name detection is re-run on the original text, so a wrong guess stored earlier can't slip through.
+    const pii = await maybeOne<Pick<CandidatePii, "full_name" | "raw_text" | "cv_filename">>(
+      "select full_name, raw_text, cv_filename from candidate_pii where candidate_id = $1",
+      [id],
+    );
+    const nameParts = pii ? identityTokens(pii.raw_text, pii.full_name, pii.cv_filename) : [];
     const problem = privacyProblem({ fullName: pii?.full_name ?? null }, findLeaks(c.redacted_cv, nameParts));
     if (problem) throw new Error(problem);
 
@@ -178,7 +184,7 @@ export async function updateContact(id: string, patch: { full_name?: string; ema
   ]);
 
   if (next.full_name !== pii.full_name) {
-    const r = redact(pii.raw_text, { fullName: next.full_name });
+    const r = redact(pii.raw_text, { fullName: next.full_name, filename: pii.cv_filename });
     const problem = privacyProblem(r.pii, r.leaks);
     await query(
       `update candidates

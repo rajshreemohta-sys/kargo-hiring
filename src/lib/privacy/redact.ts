@@ -27,6 +27,8 @@ const AADHAAR = /\b\d{4}\s\d{4}\s\d{4}\b/g;
 const PAN = /\b[A-Z]{5}\d{4}[A-Z]\b/g;
 const PASSPORT = /\b[A-PR-WY][1-9]\d\s?\d{4}[1-9]\b/g;
 const PINCODE = /\b[1-9]\d{2}\s?\d{3}\b/;
+// Indian mobile numbers, also when a PDF runs two copies together ("97293 4421897293 44218").
+const INDIAN_MOBILE = /(?:\+?91[ -]?)?[6-9]\d{4}[ -]?\d{5}/g;
 
 // "Label: value" lines that carry protected or identifying attributes.
 const SENSITIVE_LABELS: [string, RegExp][] = [
@@ -43,18 +45,13 @@ const SENSITIVE_LABELS: [string, RegExp][] = [
   ["email", /^e-?mail\b/i],
 ];
 
-// Lines that look like "Name Surname" but are headings or titles.
-const NOT_A_NAME = new Set(
-  [
-    "curriculum vitae", "resume", "résumé", "cv", "profile", "summary", "professional summary",
-    "objective", "experience", "work experience", "professional experience", "education",
-    "skills", "key skills", "core skills", "projects", "contact", "contact details",
-    "personal details", "personal information", "certifications", "achievements", "awards",
-    "languages", "interests", "hobbies", "references", "product manager", "senior product manager",
-    "operations manager", "about me", "career objective", "technical skills", "employment history",
-  ].map((s) => s.toLowerCase()),
-);
-const ROLE_WORDS = /\b(manager|engineer|analyst|executive|lead|head|director|associate|consultant|officer|intern|specialist|coordinator|developer|designer|founder|product|operations|logistics|freight|limited|ltd|pvt|inc|llp|university|college|institute|school)\b/i;
+// Words that mark a line as a section heading or job title rather than a person's name.
+const HEADING_WORDS =
+  /\b(summary|profile|objective|experience|education|skills?|competenc(?:y|ies)|qualifications?|projects?|achievements?|awards?|certifications?|languages?|interests?|hobbies|references?|responsibilities|highlights|expertise|strengths|internships?|activities|publications|positions?|academic|professional|technical|core|key|career|personal|contact|details|information|declaration|training|tools|leadership|extracurricular|volunteer(?:ing)?|work|employment|history|about|curriculum|vitae|resume|résumé|overview|accomplishments|coursework|relevant|selected|additional|portfolio)\b/i;
+const ROLE_WORDS =
+  /\b(manager|engineer|analyst|executive|lead|head|director|associate|consultant|officer|intern|specialist|coordinator|developer|designer|founder|product|operations|logistics|freight|marketing|strategic|strategy|senior|junior|chief|limited|ltd|pvt|inc|llp|university|college|institute|school|technology|bachelor|master)\b/i;
+// Words in file names that aren't part of a person's name.
+const FILENAME_NOISE = new Set(["cv", "resume", "resumé", "final", "updated", "new", "latest", "copy", "pm", "spm", "apm", "product", "manager", "senior", "doc", "pdf", "docx", "version", "draft"]);
 
 const PLACEHOLDER = {
   name: "[CANDIDATE]",
@@ -75,26 +72,82 @@ function titleCase(s: string) {
   return s.toLowerCase().replace(/(^|[\s'-])\p{L}/gu, (m) => m.toUpperCase());
 }
 
-/** Best guess at the candidate's name: the first short, name-shaped line at the top of the CV. */
-export function guessName(text: string): string | null {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 12);
-  for (const raw of lines) {
-    const line = raw.replace(/^name\s*[:\-–]\s*/i, "").replace(/[|•·,].*$/, "").trim();
-    if (line.length < 3 || line.length > 40) continue;
-    if (/[\d@/\\:]/.test(line)) continue;
-    if (NOT_A_NAME.has(line.toLowerCase())) continue;
-    if (ROLE_WORDS.test(line)) continue;
-    const words = line.split(/\s+/);
-    if (words.length < 2 || words.length > 4) continue;
-    const nameish = words.every((w) => /^\p{Lu}[\p{L}'.-]*$/u.test(w) || /^\p{Lu}\.?$/u.test(w));
-    if (nameish) return /^[\p{Lu}\s'.-]+$/u.test(line) ? titleCase(line) : line;
+/**
+ * PDFs sometimes render a name twice (small caps + normal) and the text comes out glued:
+ * "PRIYA SHARMAPriya Sharma", "Tarun JosephTARUN JOSEPH". Put the spaces back.
+ * Deliberately narrow so "LinkedIn", "KPIs" and "SaaS" are left alone.
+ */
+export function splitJoins(s: string): string {
+  return s.replace(/(\p{Ll})(\p{Lu}{2,})/gu, "$1 $2").replace(/(\p{Lu}{2,})(\p{Lu}\p{Ll}{2,})/gu, "$1 $2");
+}
+
+/** "Priya Sharma" if the text looks like a person's name (2–4 capitalised words), else null. */
+function asName(raw: string): string | null {
+  const line = raw.replace(/^name\s*[:\-–]\s*/i, "").replace(/[|•·,;].*$/, "").replace(/\s+/g, " ").trim();
+  if (line.length < 3 || line.length > 60) return null;
+  if (/[\d@/\\:()[\]&]/.test(line)) return null;
+  if (HEADING_WORDS.test(line) || ROLE_WORDS.test(line)) return null;
+  let words = line.split(" ");
+  // The same name printed twice in a row: keep one copy, preferring the mixed-case one.
+  if (words.length === 4 || words.length === 6) {
+    const half = words.length / 2;
+    const [x, y] = [words.slice(0, half), words.slice(half)];
+    if (x.join(" ").toLowerCase() === y.join(" ").toLowerCase()) words = /\p{Ll}/u.test(y.join("")) ? y : x;
   }
-  return null;
+  if (words.length < 2 || words.length > 4) return null;
+  if (!words.every((w) => /^\p{Lu}[\p{L}'.-]*$/u.test(w))) return null;
+  const name = words.join(" ");
+  return /\p{Ll}/u.test(name) ? name : titleCase(name);
+}
+
+const CONTACT = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|linkedin\.com|\+?\d[\d \t.-]{8,}\d/i;
+
+/**
+ * Every plausible way the candidate's name appears, most reliable first:
+ * a "Name:" label, the text just before or above the contact details, the first lines,
+ * and the file name when it matches words in the CV.
+ */
+export function nameCandidates(text: string, filename?: string | null): string[] {
+  const lines = splitJoins(text).split(/\r?\n/).map((l) => l.trim());
+  const found: string[] = [];
+  const add = (n: string | null) => n && !found.some((f) => f.toLowerCase() === n.toLowerCase()) && found.push(n);
+
+  for (const l of lines.slice(0, 40)) if (/^name\s*[:\-–]/i.test(l)) add(asName(l));
+
+  lines.forEach((l, i) => {
+    const m = l.match(CONTACT);
+    if (!m) return;
+    add(asName(l.slice(0, m.index))); // "Tarun Joseph  tarun@… · +91…"
+    for (let j = i - 1; j >= Math.max(0, i - 3); j--) add(asName(lines[j])); // name on the lines above
+  });
+
+  for (const l of lines.filter(Boolean).slice(0, 3)) add(asName(l));
+
+  if (filename) {
+    const parts = filename
+      .replace(/\.[a-z0-9]+$/i, "")
+      .split(/[^\p{L}]+/u)
+      .filter((t) => t.length >= 2 && !FILENAME_NOISE.has(t.toLowerCase()));
+    for (let k = Math.min(parts.length, 3); k >= 2; k--) {
+      for (let i = 0; i + k <= parts.length; i++) {
+        const phrase = parts.slice(i, i + k);
+        const re = new RegExp(`(?<![\\p{L}])${phrase.map(escapeRegExp).join("\\s+")}(?![\\p{L}])`, "iu");
+        if (re.test(splitJoins(text))) add(titleCase(phrase.join(" ")));
+      }
+    }
+  }
+  return found;
+}
+
+/** Best guess at the candidate's name. */
+export function guessName(text: string, filename?: string | null): string | null {
+  return nameCandidates(text, filename)[0] ?? null;
 }
 
 /** The words of the name, longest first, so "Priya" and "Sharma" are caught on their own too. */
-function nameTokens(fullName: string | null): string[] {
-  const parts = (fullName ?? "")
+function nameTokens(...names: (string | null)[]): string[] {
+  const parts = names
+    .join(" ")
     .split(/\s+/)
     .map((t) => t.replace(/[^\p{L}'-]/gu, ""))
     .filter((t) => t.length >= 2);
@@ -103,20 +156,22 @@ function nameTokens(fullName: string | null): string[] {
 
 function isPhone(match: string): boolean {
   if (YEAR_RANGE.test(match)) return false;
+  INDIAN_MOBILE.lastIndex = 0;
   const digits = match.replace(/\D/g, "");
   return digits.length >= 10 && digits.length <= 13;
 }
 
-export function redact(text: string, opts: { fullName?: string | null } = {}): RedactionResult {
+export function redact(text: string, opts: { fullName?: string | null; filename?: string | null } = {}): RedactionResult {
   const counts: Record<string, number> = {};
   const bump = (k: string, n = 1) => (counts[k] = (counts[k] ?? 0) + n);
   const other: Record<string, string[]> = {};
   const keep = (k: string, v: string) => (other[k] ??= []).push(v.trim());
 
-  let out = text.replace(/ /g, " ");
+  let out = splitJoins(text.replace(/ /g, " "));
 
   const emails = [...new Set(out.match(EMAIL) ?? [])];
-  const fullName = opts.fullName?.trim() || guessName(out);
+  const candidates = nameCandidates(out, opts.filename);
+  const fullName = opts.fullName?.trim() || candidates[0] || null;
   const primaryEmail = emails[0] ?? null;
 
   // 1. Labelled lines: "Date of Birth: 12/03/1994", "Address: ...", "Gender: Female".
@@ -157,13 +212,15 @@ export function redact(text: string, opts: { fullName?: string | null } = {}): R
     bump("phone");
     return PLACEHOLDER.phone;
   });
+  out = out.replace(INDIAN_MOBILE, (m) => (phones.push(m.trim()), bump("phone"), PLACEHOLDER.phone));
   out = out.replace(AADHAAR, (m) => (keep("id_number", m), bump("id_number"), PLACEHOLDER.id));
   out = out.replace(PAN, (m) => (keep("id_number", m), bump("id_number"), PLACEHOLDER.id));
   out = out.replace(PASSPORT, (m) => (keep("id_number", m), bump("id_number"), PLACEHOLDER.id));
   out = out.replace(HANDLE, (m) => (keep("handle", m), bump("handle"), PLACEHOLDER.handle));
 
   // 4. The name: the full name first, then each part on its own ("Ms. Sharma", "Priya's").
-  const tokens = nameTokens(fullName);
+  //    Every candidate spelling is removed, not only the one we picked, in case the pick is wrong.
+  const tokens = nameTokens(fullName, ...candidates);
   if (fullName) {
     const re = new RegExp(`\\b${escapeRegExp(fullName).replace(/\s+/g, "\\s+")}\\b`, "gi");
     out = out.replace(re, () => (bump("name"), PLACEHOLDER.name));
@@ -191,12 +248,19 @@ export function redact(text: string, opts: { fullName?: string | null } = {}): R
   };
 }
 
+/** Every word of every plausible spelling of the candidate's name, for the final leak check. */
+export function identityTokens(rawText: string, fullName: string | null, filename?: string | null): string[] {
+  return nameTokens(fullName, ...nameCandidates(rawText, filename));
+}
+
 /** Re-scan redacted text for anything that still looks personal. Non-empty → do not send to AI. */
 export function findLeaks(redacted: string, nameParts: string[] = []): string[] {
   const leaks: string[] = [];
   if (EMAIL.test(redacted)) leaks.push("email address");
   EMAIL.lastIndex = 0;
   for (const m of redacted.match(PHONE_CANDIDATE) ?? []) if (isPhone(m)) leaks.push("phone number");
+  if (INDIAN_MOBILE.test(redacted)) leaks.push("phone number");
+  INDIAN_MOBILE.lastIndex = 0;
   for (const t of nameParts) {
     if (new RegExp(`(?<![\\p{L}])${escapeRegExp(t)}(?![\\p{L}])`, "iu").test(redacted)) leaks.push("name");
   }
