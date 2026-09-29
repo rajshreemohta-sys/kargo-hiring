@@ -1,0 +1,8 @@
+.env*
+!.env.example
+.neon
+.claude
+.agents
+skills-lock.json
+node_modules
+.next
