@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { EvaluatePending } from "@/components/EvaluatePending";
+import { SendAllDrafts, SendDraft } from "@/components/SendButtons";
 import { Uploader } from "@/components/Uploader";
 import { DecisionBadge, ScoreBar, StatusText } from "@/components/ui";
 import { candidateRef, query, type Candidate } from "@/lib/db";
@@ -8,7 +9,7 @@ import { ROLE_SHORT, type Role } from "@/lib/rubric";
 type Row = Candidate & {
   full_name: string | null;
   evaluations: { role: Role; total: number }[];
-  emails: { kind: string; status: string }[];
+  emails: { id: string; kind: "invite" | "rejection"; status: string }[];
 };
 
 const VIEWS = [
@@ -24,7 +25,7 @@ export default async function Dashboard({ searchParams }: PageProps<"/">) {
   const all = await query<Row>(
     `select c.*, p.full_name,
        coalesce((select json_agg(json_build_object('role', e.role, 'total', e.total)) from evaluations e where e.candidate_id = c.id), '[]') as evaluations,
-       coalesce((select json_agg(json_build_object('kind', m.kind, 'status', m.status)) from emails m where m.candidate_id = c.id), '[]') as emails
+       coalesce((select json_agg(json_build_object('id', m.id, 'kind', m.kind, 'status', m.status)) from emails m where m.candidate_id = c.id), '[]') as emails
      from candidates c left join candidate_pii p on p.candidate_id = c.id
      order by c.created_at desc
      limit 500`,
@@ -42,6 +43,7 @@ export default async function Dashboard({ searchParams }: PageProps<"/">) {
     return true;
   });
   const pendingIds = all.filter((r) => r.status === "pending").map((r) => r.id);
+  const drafts = all.flatMap((r) => r.emails.filter((e) => e.status === "draft" || e.status === "failed"));
 
   const stats = [
     { label: "CVs screened", value: count((r) => r.status === "evaluated") },
@@ -70,6 +72,13 @@ export default async function Dashboard({ searchParams }: PageProps<"/">) {
 
       <Uploader />
       {pendingIds.length > 0 && <EvaluatePending ids={pendingIds} />}
+      {drafts.length > 1 && (
+        <SendAllDrafts
+          ids={drafts.map((d) => d.id)}
+          invites={drafts.filter((d) => d.kind === "invite").length}
+          rejections={drafts.filter((d) => d.kind === "rejection").length}
+        />
+      )}
 
       <section className="card overflow-hidden">
         <div className="flex flex-col gap-3 border-b border-line p-3 sm:flex-row sm:items-center sm:justify-between">
@@ -128,12 +137,16 @@ export default async function Dashboard({ searchParams }: PageProps<"/">) {
                         {r.status === "evaluated" ? <DecisionBadge decision={r.decision} role={r.decision_role} /> : <StatusText status={r.status} error={r.error} />}
                       </td>
                       <td className="px-4 py-3 text-muted">
-                        {!email ? "—" : email.status === "sent" ? (
+                        {email?.status === "sent" ? (
                           <span className="text-ink">{email.kind === "invite" ? "Invite sent" : "Rejection sent"}</span>
-                        ) : email.status === "failed" ? (
-                          <span className="text-red-600">Failed</span>
+                        ) : email?.status === "draft" || email?.status === "failed" ? (
+                          <SendDraft id={email.id} kind={email.kind} failed={email.status === "failed"} />
+                        ) : email?.status === "sending" ? (
+                          "Sending…"
+                        ) : r.decision === "review" ? (
+                          <Link href={`/candidates/${r.id}`} className="text-accent hover:underline">Decide to email</Link>
                         ) : (
-                          "Draft ready"
+                          "—"
                         )}
                       </td>
                     </tr>
