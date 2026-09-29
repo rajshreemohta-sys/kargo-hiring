@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { EvaluatePending } from "@/components/EvaluatePending";
 import { SendAllDrafts, SendDraft } from "@/components/SendButtons";
+import { RowLink } from "@/components/RowLink";
 import { Uploader } from "@/components/Uploader";
 import { DecisionBadge, ScoreBar, StatusText } from "@/components/ui";
 import { candidateRef, query, type Candidate } from "@/lib/db";
@@ -123,7 +124,7 @@ export default async function Dashboard({ searchParams }: PageProps<"/">) {
                   const score = (role: Role) => r.evaluations.find((e) => e.role === role)?.total ?? null;
                   const email = r.emails[0];
                   return (
-                    <tr key={r.id} className="border-b border-line last:border-0 hover:bg-soft/60">
+                    <RowLink key={r.id} href={`/candidates/${r.id}`}>
                       <td className="px-4 py-3">
                         <Link href={`/candidates/${r.id}`} className="font-medium hover:underline">
                           {r.full_name ?? "Name not found"}
@@ -149,7 +150,7 @@ export default async function Dashboard({ searchParams }: PageProps<"/">) {
                           "—"
                         )}
                       </td>
-                    </tr>
+                    </RowLink>
                   );
                 })}
               </tbody>
