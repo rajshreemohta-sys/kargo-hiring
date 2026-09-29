@@ -5,7 +5,7 @@ import type { Role } from "./rubric";
 import type { Band, ScoredCriterion } from "./scoring";
 import type { SenderSettings } from "./email/templates";
 
-// Netlify Database is Postgres; from Vercel we connect with its connection string.
+// Neon Postgres. Use the pooled connection string (host contains "-pooler") for the app.
 // Return numeric and bigint columns as JS numbers (scores and ref numbers are small).
 pg.types.setTypeParser(pg.types.builtins.NUMERIC, parseFloat);
 pg.types.setTypeParser(pg.types.builtins.INT8, (v) => parseInt(v, 10));
@@ -17,8 +17,8 @@ pg.types.setTypeParser(pg.types.builtins.TIMESTAMPTZ, (v) => g.pgParseTimestamp!
 
 function pool(): pg.Pool {
   if (g.kargoPool) return g.kargoPool;
-  const connectionString = process.env.NETLIFY_DATABASE_URL;
-  if (!connectionString) throw new Error("Missing NETLIFY_DATABASE_URL.");
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error("Missing DATABASE_URL.");
   // Small pool: each serverless instance handles few requests at a time.
   const created = new pg.Pool({ connectionString, max: 3, idleTimeoutMillis: 10_000 });
   attachDatabasePool(created); // lets Vercel close idle connections before a function is suspended
@@ -68,7 +68,6 @@ export type CandidatePii = {
   links: string[];
   other: Record<string, string[]>;
   raw_text: string;
-  cv_key: string | null;
   cv_filename: string | null;
 };
 

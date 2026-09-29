@@ -55,7 +55,7 @@ export default async function CandidatePage({ params }: PageProps<"/candidates/[
             </p>
           )}
         </div>
-        <CandidateActions id={id} canRescore={candidate.status !== "evaluating" && !locked} hasFile={!!contact?.cv_key} />
+        <CandidateActions id={id} canRescore={candidate.status !== "evaluating" && !locked} hasFile={!!contact?.cv_filename} />
       </div>
 
       {candidate.status === "error" && candidate.error && (

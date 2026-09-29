@@ -40,21 +40,20 @@ export async function createCandidate(input: {
     [input.appliedRole, r.redacted, JSON.stringify(r.counts), problem ? "error" : "pending", problem],
   );
 
-  let cvKey: string | null = null;
+  let storedFilename: string | null = null;
   if (input.file) {
     try {
-      cvKey = id;
-      await putCv(cvKey, input.file);
+      await putCv(id, input.file);
+      storedFilename = input.file.name;
     } catch (e) {
-      console.error("CV file upload failed", e);
-      cvKey = null; // keep going: the text is what matters, the file is a convenience
+      console.error("Storing the CV file failed", e); // keep going: the text is what matters
     }
   }
 
   await query(
-    `insert into candidate_pii (candidate_id, full_name, email, phone, links, other, raw_text, cv_key, cv_filename)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-    [id, r.pii.fullName, r.pii.email, r.pii.phone, r.pii.links, JSON.stringify(r.pii.other), rawText, cvKey, input.file?.name ?? null],
+    `insert into candidate_pii (candidate_id, full_name, email, phone, links, other, raw_text, cv_filename)
+     values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [id, r.pii.fullName, r.pii.email, r.pii.phone, r.pii.links, JSON.stringify(r.pii.other), rawText, storedFilename],
   );
   return { id };
 }

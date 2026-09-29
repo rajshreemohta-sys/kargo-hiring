@@ -16,7 +16,7 @@ export const POST = handle(async (request: Request) => {
   let rawText: string;
   let upload: File | undefined;
   if (file instanceof File && file.size > 0) {
-    if (file.size > MAX_BYTES) return fail("That file is over 8 MB.");
+    if (file.size > MAX_BYTES) return fail("That file is over 4 MB. Try a smaller export, or paste the text.");
     rawText = await extractText(file);
     upload = file;
   } else if (typeof pasted === "string" && pasted.trim()) {

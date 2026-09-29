@@ -1,32 +1,21 @@
 import "server-only";
-import { getStore, type Store } from "@netlify/blobs";
+import { maybeOne, query } from "./db";
 
-// Original CV files live in a private Netlify Blobs store. Running on Vercel, the store is
-// reached with the Netlify site ID and an access token.
-let store: Store | null = null;
+// Original CV files are kept in Postgres (cv_files), next to the private contact details.
+// Deleting a candidate removes the file with them.
 
-function cvs(): Store {
-  if (store) return store;
-  const siteID = process.env.NETLIFY_SITE_ID;
-  const token = process.env.NETLIFY_BLOBS_TOKEN;
-  if (!siteID || !token) throw new Error("Missing NETLIFY_SITE_ID or NETLIFY_BLOBS_TOKEN.");
-  store = getStore({ name: "cvs", siteID, token });
-  return store;
+export async function putCv(candidateId: string, file: File): Promise<void> {
+  await query("insert into cv_files (candidate_id, content_type, data) values ($1, $2, $3)", [
+    candidateId,
+    file.type || "application/octet-stream",
+    Buffer.from(await file.arrayBuffer()),
+  ]);
 }
 
-export async function putCv(key: string, file: File): Promise<void> {
-  await cvs().set(key, await file.arrayBuffer(), {
-    metadata: { filename: file.name, contentType: file.type || "application/octet-stream" },
-  });
-}
-
-export async function getCv(key: string): Promise<{ data: ArrayBuffer; filename: string; contentType: string } | null> {
-  const blob = await cvs().getWithMetadata(key, { type: "arrayBuffer" });
-  if (!blob) return null;
-  const meta = blob.metadata as { filename?: string; contentType?: string };
-  return { data: blob.data, filename: meta.filename ?? "cv", contentType: meta.contentType ?? "application/octet-stream" };
-}
-
-export async function deleteCv(key: string): Promise<void> {
-  await cvs().delete(key);
+export async function getCv(candidateId: string): Promise<{ data: Buffer; filename: string; contentType: string } | null> {
+  return maybeOne(
+    `select f.data, f.content_type as "contentType", p.cv_filename as filename
+     from cv_files f join candidate_pii p using (candidate_id) where f.candidate_id = $1`,
+    [candidateId],
+  );
 }

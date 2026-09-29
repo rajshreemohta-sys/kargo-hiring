@@ -77,7 +77,7 @@ export function Uploader() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="font-semibold">Upload CVs</h2>
-          <p className="text-sm text-muted">PDF, DOCX or TXT. Add as many as you like.</p>
+          <p className="text-sm text-muted">PDF, DOCX or TXT, up to 4 MB each. Add as many as you like.</p>
         </div>
         <div className="flex items-center gap-2 text-sm">
           <span className="text-muted">Applied for</span>

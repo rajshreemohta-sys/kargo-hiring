@@ -27,11 +27,17 @@ create table public.candidate_pii (
   links text[] not null default '{}',
   other jsonb not null default '{}'::jsonb,   -- address, DOB etc. that were stripped
   raw_text text not null,                     -- original CV text, never sent to AI
-  cv_key text,                                -- key in the private Netlify Blobs store
-  cv_filename text,
+  cv_filename text,                           -- set only when the original file is stored
   created_at timestamptz not null default now()
 );
 create index candidate_pii_email_idx on public.candidate_pii (lower(email));
+
+-- Original CV files, kept in the database so they stay private and go when the candidate goes.
+create table public.cv_files (
+  candidate_id uuid primary key references public.candidates(id) on delete cascade,
+  content_type text not null,
+  data bytea not null
+);
 
 create table public.evaluations (
   id uuid primary key default gen_random_uuid(),

@@ -1,7 +1,6 @@
-import { maybeOne, query } from "@/lib/db";
+import { query } from "@/lib/db";
 import { fail, handle, ok } from "@/lib/http";
 import { applyDecision, updateContact } from "@/lib/pipeline";
-import { deleteCv } from "@/lib/storage";
 
 type Body =
   | { action: "decision"; decision: "shortlisted" | "review" | "rejected"; role: "pm" | "spm" }
@@ -28,8 +27,6 @@ export const PATCH = handle(async (request: Request, ctx: RouteContext<"/api/can
 // Remove a candidate and every copy of their data, including the original file.
 export const DELETE = handle(async (_req: Request, ctx: RouteContext<"/api/candidates/[id]">) => {
   const { id } = await ctx.params;
-  const pii = await maybeOne<{ cv_key: string | null }>("select cv_key from candidate_pii where candidate_id = $1", [id]);
-  if (pii?.cv_key) await deleteCv(pii.cv_key);
-  await query("delete from candidates where id = $1", [id]); // cascades to contact details, scores, emails
+  await query("delete from candidates where id = $1", [id]); // cascades to contact details, CV file, scores, emails
   return ok();
 });

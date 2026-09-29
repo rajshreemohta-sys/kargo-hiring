@@ -1,11 +1,12 @@
-// Applies db/migrations/*.sql in order, once each, to the Netlify Database.
-// Usage: npm run db:migrate   (reads NETLIFY_DATABASE_URL from .env.local)
+// Applies db/migrations/*.sql in order, once each, to the Neon database.
+// Usage: npm run db:migrate   (reads DATABASE_URL_UNPOOLED, or DATABASE_URL, from .env.local)
 import { readdir, readFile } from "node:fs/promises";
 import pg from "pg";
 
-const url = process.env.NETLIFY_DATABASE_URL;
+// Migrations need a direct (unpooled) connection when one is available.
+const url = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
 if (!url) {
-  console.error("Missing NETLIFY_DATABASE_URL. Copy the connection string from Netlify → Data & Storage → Database.");
+  console.error("Missing DATABASE_URL. Copy the connection string from the Neon console (or `vercel env pull .env.local`).");
   process.exit(1);
 }
 
